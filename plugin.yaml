@@ -1,0 +1,19 @@
+name: weixin-topics-platform
+label: Weixin Topics
+kind: platform
+version: 0.1.0
+description: >
+  Personal Weixin iLink adapter with persistent logical topics. Each topic is
+  routed through Hermes's official thread_id session seam; transcripts remain
+  owned by Hermes and are never copied into the plugin database.
+requires_env:
+  - name: WEIXIN_ACCOUNT_ID
+    description: Weixin iLink account ID created by Hermes QR login
+    password: false
+optional_env:
+  - name: WEIXIN_TOKEN
+    description: Optional token override; Hermes can restore the QR-login token
+    password: true
+  - name: WEIXIN_ALLOWED_USERS
+    description: Comma-separated peer IDs allowed to use the bot
+    password: true

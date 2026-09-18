@@ -1,29 +1,29 @@
-# Hermes WeChat Session Routing
+# HermesMux Topic Routing
 
-This context defines how the Hermes WeChat channel keeps independent conversation state despite the channel's single underlying Hermes session.
+HermesMux lets one personal Weixin DM expose several durable logical topics without owning Hermes conversation history.
 
 ## Language
 
-**WeChat Conversation**:
-A direct WeChat chat identified by a stable platform conversation identifier. Group chats are outside this project's initial scope.
-_Avoid_: User session, group chat, chat window
+**Weixin Peer**:
+The stable iLink sender/chat identifier for one direct-message participant.
+_Avoid_: Official Account OpenID, group, browser session
+
+**Topic**:
+A plugin-owned logical routing scope inside a Weixin Peer. A Topic has a stable UUID and display title.
+_Avoid_: Hermes Session, thread transcript, chat window
+
+**Current Topic**:
+The Topic that receives an ordinary inbound message for a Weixin Peer.
+_Avoid_: Global session, current transcript
 
 **Hermes Session**:
-An isolated conversational context managed by Hermes for processing messages.
-_Avoid_: Global session, channel session
+The conversational context owned and persisted by Hermes. Hermes derives its key from `SessionSource`, including the plugin's Topic UUID as `thread_id`.
+_Avoid_: Plugin session, SQLite session
 
-**Session Binding**:
-The durable association between one WeChat Conversation and its Hermes Session.
-_Avoid_: Session copy, temporary session
+**Topic Index**:
+The plugin's SQLite metadata containing Topic IDs, titles, current/previous pointers, and bounded message-deduplication IDs. It never contains full Transcripts or Hermes Session IDs.
+_Avoid_: Chat database, history store
 
-**Session Reset**:
-The direct-chat participant's requested replacement of their WeChat Conversation's current Hermes Session.
-_Avoid_: Clear history, restart chat
-
-**Conversation Metadata**:
-The direct-message chat type and stable platform identifiers supplied to Hermes for authorization and deterministic routing.
-_Avoid_: Display names, personal profile data
-
-**WeChat Official Account**:
-The official WeChat account integration used as this extension's inbound and outbound bot channel.
-_Avoid_: Desktop-client automation, WeCom bot
+**Personal Weixin iLink**:
+Tencent's long-polling bot API used by Hermes's official personal-Weixin adapter.
+_Avoid_: WeChat Official Account, WeCom, desktop automation
