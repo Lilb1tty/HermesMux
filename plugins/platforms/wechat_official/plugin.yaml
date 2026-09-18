@@ -1,0 +1,22 @@
+name: wechat-official-platform
+label: WeChat Official Account
+kind: platform
+version: 0.1.0
+description: Hermes gateway adapter for WeChat Official Account direct messages.
+requires_env:
+  - name: WECHAT_OFFICIAL_APP_ID
+    description: WeChat Official Account AppID
+    password: true
+  - name: WECHAT_OFFICIAL_APP_SECRET
+    description: WeChat Official Account AppSecret
+    password: true
+  - name: WECHAT_OFFICIAL_TOKEN
+    description: Token configured for the WeChat callback URL
+    password: true
+optional_env:
+  - name: WECHAT_OFFICIAL_PORT
+    description: Local webhook listener port (default: 8080)
+    password: false
+  - name: WECHAT_OFFICIAL_ALLOWED_USERS
+    description: Comma-separated WeChat OpenIDs allowed to use Hermes
+    password: true

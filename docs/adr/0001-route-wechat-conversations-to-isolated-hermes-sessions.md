@@ -1,0 +1,3 @@
+# Route Direct WeChat Conversations to Isolated Hermes Sessions
+
+The WeChat channel exposes only one underlying Hermes session, but each direct WeChat Conversation needs independent context. The extension will act as a Hermes platform adapter: it will pass Hermes the direct-message chat type and stable source identifiers, allowing the gateway to authorize the sender, deterministically select the conversation, and queue same-session messages. The direct-chat participant may start a fresh session with Hermes's native `/new` command; there is no automatic expiry or custom rotation. Group chats are out of scope for the initial release. This preserves Hermes's official gateway semantics while avoiding context leakage between chats.
