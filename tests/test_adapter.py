@@ -47,11 +47,17 @@ class AdapterTests(unittest.TestCase):
 
     def test_registers_as_a_distinct_platform(self):
         calls = []
-        context = SimpleNamespace(register_platform=lambda **kwargs: calls.append(kwargs))
+        tasks = []
+        context = SimpleNamespace(
+            llm=object(),
+            register_auxiliary_task=lambda name, **kwargs: tasks.append((name, kwargs)),
+            register_platform=lambda **kwargs: calls.append(kwargs),
+        )
 
         self.plugin.register(context)
 
         self.assertEqual("weixin_topics", calls[0]["name"])
+        self.assertEqual("weixin_topic_boundary", tasks[0][0])
 
 
 def _event(text, message_id):

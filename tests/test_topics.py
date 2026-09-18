@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -9,7 +10,20 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from topics import TopicRoutingModule, TopicStore
+from topics import TopicBoundaryDetector, TopicRoutingModule, TopicStore
+
+
+class FakeLlm:
+    def __init__(self, parsed=None, error=None):
+        self.parsed = parsed
+        self.error = error
+        self.calls = []
+
+    async def acomplete_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return SimpleNamespace(parsed=self.parsed)
 
 
 def message(text, message_id="message-1", peer_id="peer-1"):
@@ -107,6 +121,108 @@ class TopicRoutingTests(unittest.TestCase):
         self.assertEqual("reply", archived.action)
         self.assertNotIn(old.topic_id, [topic.topic_id for topic in visible])
         self.assertEqual(1, row["archived"])
+
+    def test_clear_natural_boundary_creates_a_topic_without_llm(self):
+        router = TopicRoutingModule(
+            self.store, "account-1", auto_detect=True, cooldown_turns=99
+        )
+        old = asyncio.run(router.decide(message("继续原来的事情", "m1")))
+        new = asyncio.run(router.decide(message("换个完全不同的问题，东京怎么玩", "m2")))
+
+        self.assertNotEqual(old.topic_id, new.topic_id)
+        self.assertEqual("rule", new.reason)
+
+    def test_high_confidence_detection_routes_trigger_to_new_topic(self):
+        llm = FakeLlm(
+            {
+                "is_new_topic": True,
+                "confidence": 0.97,
+                "suggested_title": "东京旅行",
+            }
+        )
+        router = TopicRoutingModule(
+            self.store,
+            "account-1",
+            detector=TopicBoundaryDetector(llm),
+            auto_detect=True,
+            cooldown_turns=2,
+        )
+        old = asyncio.run(router.decide(message("讨论邮件队列设计", "m1")))
+        asyncio.run(router.decide(message("队列需要支持重试机制", "m2")))
+        new = asyncio.run(router.decide(message("下个月去东京应该怎样安排行程", "m3")))
+
+        self.assertNotEqual(old.topic_id, new.topic_id)
+        self.assertEqual("detected", new.reason)
+        self.assertEqual("下个月去东京应该怎样安排行程", new.content)
+        self.assertEqual(1, len(llm.calls))
+        payload = json.loads(llm.calls[0]["input"][0]["text"])
+        self.assertEqual(["讨论邮件队列设计", "队列需要支持重试机制"], payload["recent_user_messages"])
+        self.assertEqual("weixin_topic_boundary", llm.calls[0]["task"])
+
+    def test_low_confidence_or_detector_failure_keeps_current_topic(self):
+        low = FakeLlm(
+            {
+                "is_new_topic": True,
+                "confidence": 0.70,
+                "suggested_title": "可能的新话题",
+            }
+        )
+        router = TopicRoutingModule(
+            self.store,
+            "account-1",
+            detector=TopicBoundaryDetector(low),
+            auto_detect=True,
+            cooldown_turns=0,
+        )
+        current = asyncio.run(router.decide(message("这是一个足够长的原始问题", "m1")))
+
+        failing = FakeLlm(error=RuntimeError("provider unavailable"))
+        router.detector = TopicBoundaryDetector(failing)
+        after_failure = asyncio.run(
+            router.decide(message("这是另一个足够长但检测失败的问题", "m2"))
+        )
+
+        self.assertEqual("current", current.reason)
+        self.assertEqual(current.topic_id, after_failure.topic_id)
+
+    def test_continuation_skips_the_detector(self):
+        llm = FakeLlm(
+            {
+                "is_new_topic": True,
+                "confidence": 0.99,
+                "suggested_title": "错误切换",
+            }
+        )
+        router = TopicRoutingModule(
+            self.store,
+            "account-1",
+            detector=TopicBoundaryDetector(llm),
+            auto_detect=True,
+            cooldown_turns=0,
+        )
+
+        decision = asyncio.run(
+            router.decide(message("继续解释一下刚才的实现细节", "m1"))
+        )
+
+        self.assertEqual("current", decision.reason)
+        self.assertEqual([], llm.calls)
+
+    def test_invalid_or_timed_out_structured_response_fails_closed(self):
+        invalid = TopicBoundaryDetector(FakeLlm({"is_new_topic": "yes"}))
+        timed_out = TopicBoundaryDetector(FakeLlm(error=TimeoutError()))
+        arguments = {
+            "current_title": "当前",
+            "recent_messages": ["上下文"],
+            "current_message": "一条足够长的新消息",
+            "turn_count": 9,
+        }
+
+        invalid_result = asyncio.run(invalid.detect(**arguments))
+        timeout_result = asyncio.run(timed_out.detect(**arguments))
+
+        self.assertIsNone(invalid_result)
+        self.assertIsNone(timeout_result)
 
 
 if __name__ == "__main__":

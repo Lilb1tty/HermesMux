@@ -8,13 +8,13 @@ from gateway.config import Platform
 from gateway.platforms.weixin import WeixinAdapter, check_weixin_requirements
 from hermes_cli.config import get_hermes_home
 
-from .topics import TopicRoutingModule, TopicStore
+from .topics import TopicBoundaryDetector, TopicRoutingModule, TopicStore
 
 
 class WeixinTopicsAdapter(WeixinAdapter):
     """Reuse Hermes's official iLink transport and add routing before session keying."""
 
-    def __init__(self, config):
+    def __init__(self, config, *, llm=None):
         super().__init__(config)
         # The platform has already been registered before its factory runs, so Hermes can
         # safely create this dynamic enum member. A distinct name preserves old `weixin`
@@ -30,7 +30,24 @@ class WeixinTopicsAdapter(WeixinAdapter):
             database_path,
             processed_retention_days=topics.get("processed_retention_days", 7),
         )
-        self._topic_router = TopicRoutingModule(store, self._account_id)
+        auto_detect = _as_bool(topics.get("auto_detect", True))
+        detector = (
+            TopicBoundaryDetector(
+                llm,
+                confidence_threshold=topics.get("confidence_threshold", 0.90),
+                timeout=topics.get("detector_timeout_seconds", 3),
+            )
+            if auto_detect and llm is not None
+            else None
+        )
+        self._topic_router = TopicRoutingModule(
+            store,
+            self._account_id,
+            detector=detector,
+            auto_detect=auto_detect,
+            recent_user_messages=topics.get("recent_user_messages", 4),
+            cooldown_turns=topics.get("cooldown_turns", 4),
+        )
 
     async def handle_message(self, event) -> None:
         # Group topics are deliberately out of scope. The official transport also has its
@@ -62,10 +79,15 @@ class WeixinTopicsAdapter(WeixinAdapter):
 
 
 def register(ctx) -> None:
+    ctx.register_auxiliary_task(
+        "weixin_topic_boundary",
+        display_name="Weixin topic boundary",
+        description="Conservatively detects clear topic changes in personal Weixin DMs.",
+    )
     ctx.register_platform(
         name="weixin_topics",
         label="Weixin Topics",
-        adapter_factory=lambda config: WeixinTopicsAdapter(config),
+        adapter_factory=lambda config: WeixinTopicsAdapter(config, llm=ctx.llm),
         check_fn=check_weixin_requirements,
         required_env=["WEIXIN_ACCOUNT_ID"],
         allowed_users_env="WEIXIN_ALLOWED_USERS",
@@ -76,3 +98,9 @@ def register(ctx) -> None:
             "topics; answer only from the current Hermes session and shared memory."
         ),
     )
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}

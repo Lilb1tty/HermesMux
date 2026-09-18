@@ -2,9 +2,9 @@
 
 HermesMux 是一个面向 **个人微信 Weixin iLink Bot** 的第三方 Hermes platform plugin。
 
-微信里仍然只有一个私聊窗口，但你可以在这个窗口里创建多个逻辑话题。每个话题都会通过 Hermes 官方 `SessionSource.thread_id` 进入独立 Session；切换话题不会清空或复制旧 Transcript，Hermes 的 Memory、压缩和历史检索仍照常工作。
+微信里仍然只有一个私聊窗口，但插件会保守地判断你是否开启了新话题。每个话题都会通过 Hermes 官方 `SessionSource.thread_id` 进入独立 Session；切换话题不会清空或复制旧 Transcript，Hermes 的 Memory、压缩和历史检索仍照常工作。
 
-> 当前版本是 Phase 1：支持显式创建和切换话题。自动识别“用户是否换了话题”尚未启用，避免未经评估的误切换污染会话。
+> 当前版本已实现 Phase 2 检测代码，但尚未完成 200 条人工标注样本的 precision 门禁和真实个人微信 E2E。检测偏保守：不确定、超时或模型异常时一律留在当前话题。
 
 ## 安装
 
@@ -54,6 +54,11 @@ platforms:
       text_batch_split_delay_seconds: 5.0
 
       topics:
+        auto_detect: true
+        confidence_threshold: 0.90
+        detector_timeout_seconds: 3
+        recent_user_messages: 4
+        cooldown_turns: 4
         processed_retention_days: 7
 ```
 
@@ -76,13 +81,23 @@ hermes gateway
 | `撤销切换` | 返回上一个话题 |
 | `归档当前话题` | 从默认列表隐藏当前话题，不删除 Transcript |
 
+自动检测默认静默运行：
+
+- `换个完全不同的问题，东京怎么玩` 等明确换题表达会直接创建新 Topic；
+- 没有提示词的换题会交给 Hermes 官方 `ctx.llm` 结构化判断，置信度达到 `0.90` 才切换；
+- “继续”“刚才那个”“再解释一下”等延续表达不会触发切换；
+- 新 Topic 前 4 轮为冷却期；模型超时、返回异常或低置信度时继续当前 Topic；
+- 自动切错时发送 `撤销切换` 即可返回；触发消息仍完整保留在新 Topic 中。
+
+检测器注册为 Hermes auxiliary task `weixin_topic_boundary`，复用 Hermes 已配置的模型与凭据，不需要在插件中填写新的 API Key。最近 4 条用户消息只保存在 gateway 进程内存中，每条最多 500 字；重启后清空并重新进入冷却期。
+
 话题索引默认保存在：
 
 ```text
 ~/.hermes/state/weixin_topics.sqlite3
 ```
 
-数据库只保存 Topic 元数据、当前指针和 7 天的 iLink 消息去重 ID，不保存完整聊天记录或 Hermes Session ID。
+数据库只保存 Topic 元数据、当前指针和 7 天的 iLink 消息去重 ID，不保存检测上下文、完整聊天记录或 Hermes Session ID。
 
 ## 验证
 

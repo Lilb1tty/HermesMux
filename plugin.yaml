@@ -1,11 +1,11 @@
 name: weixin-topics-platform
 label: Weixin Topics
 kind: platform
-version: 0.1.0
+version: 0.2.0
 description: >
-  Personal Weixin iLink adapter with persistent logical topics. Each topic is
-  routed through Hermes's official thread_id session seam; transcripts remain
-  owned by Hermes and are never copied into the plugin database.
+  Personal Weixin iLink adapter with conservative automatic topic detection.
+  Each topic is routed through Hermes's official thread_id session seam;
+  transcripts remain owned by Hermes and are never copied into the plugin database.
 requires_env:
   - name: WEIXIN_ACCOUNT_ID
     description: Weixin iLink account ID created by Hermes QR login

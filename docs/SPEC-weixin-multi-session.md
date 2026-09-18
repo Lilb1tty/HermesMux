@@ -5,7 +5,7 @@
 | 文档版本 | v1.1 |
 | 作者 | Owen Zou（邹博文）+ Hermes |
 | 修订日期 | 2026-09-18 |
-| 状态 | Phase 1 代码完成，待个人微信 E2E 验收 |
+| 状态 | Phase 2 代码完成，待 200 条标注集质量门禁与个人微信 E2E 验收 |
 | 目标平台 | Hermes Agent 个人微信 Weixin iLink Bot |
 | 交付形式 | 第三方 Hermes platform plugin |
 | 目标版本 | Hermes Agent `c661785f872b5647fbac7c138d965180783bd9af`（升级前重新验证） |
@@ -350,7 +350,7 @@ platforms:
         detector_timeout_seconds: 3
         recent_user_messages: 4
         cooldown_turns: 4
-        show_auto_switch_hint: true
+        show_auto_switch_hint: false
 ```
 
 配置原则：
