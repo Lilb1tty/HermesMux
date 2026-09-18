@@ -29,6 +29,7 @@ class WeixinTopicsAdapter(WeixinAdapter):
         store = TopicStore(
             database_path,
             processed_retention_days=topics.get("processed_retention_days", 7),
+            metrics_retention_days=topics.get("metrics_retention_days", 30),
         )
         auto_detect = _as_bool(topics.get("auto_detect", True))
         detector = (
@@ -48,6 +49,20 @@ class WeixinTopicsAdapter(WeixinAdapter):
             recent_user_messages=topics.get("recent_user_messages", 4),
             cooldown_turns=topics.get("cooldown_turns", 4),
         )
+
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        """Refuse dual polling before the official iLink adapter opens a connection."""
+        runner_config = getattr(getattr(self, "gateway_runner", None), "config", None)
+        builtin = getattr(runner_config, "platforms", {}).get(Platform.WEIXIN)
+        if builtin is not None and getattr(builtin, "enabled", False):
+            self._set_fatal_error(
+                "weixin_topics_conflict",
+                "Disable platforms.weixin before enabling platforms.weixin_topics; "
+                "both would poll the same iLink account.",
+                retryable=False,
+            )
+            return False
+        return await super().connect(is_reconnect=is_reconnect)
 
     async def handle_message(self, event) -> None:
         # Group topics are deliberately out of scope. The official transport also has its

@@ -60,6 +60,7 @@ platforms:
         recent_user_messages: 4
         cooldown_turns: 4
         processed_retention_days: 7
+        metrics_retention_days: 30
 ```
 
 也可以继续使用 Hermes 官方的 `WEIXIN_ACCOUNT_ID`、`WEIXIN_TOKEN` 和 `WEIXIN_ALLOWED_USERS` 环境变量。配置完成后重启 gateway：
@@ -80,6 +81,7 @@ hermes gateway
 | `切到 ab12cd34` | 恢复旧话题及其 Hermes 历史 |
 | `撤销切换` | 返回上一个话题 |
 | `归档当前话题` | 从默认列表隐藏当前话题，不删除 Transcript |
+| `话题统计` | 查看自动换题次数、撤销反馈、检测失败数与 p95 延迟 |
 
 自动检测默认静默运行：
 
@@ -97,7 +99,7 @@ hermes gateway
 ~/.hermes/state/weixin_topics.sqlite3
 ```
 
-数据库只保存 Topic 元数据、当前指针和 7 天的 iLink 消息去重 ID，不保存检测上下文、完整聊天记录或 Hermes Session ID。
+数据库只保存 Topic 元数据、当前指针和 7 天的 iLink 消息去重 ID，不保存检测上下文、完整聊天记录或 Hermes Session ID。自动检测还会保存最多 30 天的无内容指标（结果、置信度、延迟和撤销反馈），用于观察稳定性；撤销反馈不是人工标注 precision。
 
 ## 验证
 
@@ -106,5 +108,7 @@ python -m unittest discover -s tests -v
 ```
 
 如要重新验证 Hermes 官方 Session seam，请把 `HERMES_AGENT_SOURCE` 指向目标 Hermes checkout 后运行同一命令。
+
+发布自动检测前，按 [质量门禁](docs/QUALITY-GATE.md) 对至少 200 条人工标注样本运行离线评估；真实微信验收步骤见 [发布验收](docs/RELEASE-CHECKLIST.md)。
 
 完整设计和后续自动检测门禁见 [技术规格书](docs/SPEC-weixin-multi-session.md)。

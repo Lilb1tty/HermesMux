@@ -45,6 +45,18 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual([], self.adapter.handled)
         self.assertIn("当前话题", self.adapter.sent[0][1])
 
+    def test_refuses_to_poll_alongside_builtin_weixin(self):
+        self.adapter.gateway_runner = SimpleNamespace(
+            config=SimpleNamespace(
+                platforms={self.plugin.adapter.Platform.WEIXIN: SimpleNamespace(enabled=True)}
+            )
+        )
+
+        connected = asyncio.run(self.adapter.connect())
+
+        self.assertFalse(connected)
+        self.assertEqual("weixin_topics_conflict", self.adapter.fatal_error[0])
+
     def test_registers_as_a_distinct_platform(self):
         calls = []
         tasks = []
@@ -90,6 +102,8 @@ def _load_plugin_with_gateway_contract():
                 self.value = value
 
         class Platform:
+            WEIXIN = PlatformValue("weixin")
+
             def __new__(cls, value):
                 return PlatformValue(value)
 
@@ -114,6 +128,12 @@ def _load_plugin_with_gateway_contract():
 
             async def handle_message(self, event):
                 self.handled.append((event.source.thread_id, event.text))
+
+            async def connect(self, *, is_reconnect=False):
+                return True
+
+            def _set_fatal_error(self, code, message, retryable=False):
+                self.fatal_error = (code, message, retryable)
 
             async def send(self, chat_id, content, reply_to=None, metadata=None):
                 self.sent.append((chat_id, content, reply_to))

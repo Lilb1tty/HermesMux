@@ -235,6 +235,18 @@ CREATE TABLE processed_messages (
     processed_at TEXT NOT NULL,
     PRIMARY KEY (account_id, message_id)
 );
+
+CREATE TABLE detection_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    peer_id TEXT NOT NULL,
+    topic_id TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    confidence REAL,
+    latency_ms INTEGER,
+    was_undone INTEGER NOT NULL DEFAULT 0,
+    observed_at TEXT NOT NULL
+);
 ```
 
 约束：
@@ -244,6 +256,7 @@ CREATE TABLE processed_messages (
 - 不保存完整 Transcript；
 - 不永久保存 `trigger_message`；
 - `processed_messages` 用于抵御 iLink 重复投递，并按固定保留期清理；
+- `detection_events` 只保存结果、置信度、延迟和撤销反馈，不保存任何消息正文；按独立的固定保留期清理；撤销是运营信号，不替代人工标注 precision；
 - 当前 Topic 切换采用事务和 revision compare-and-swap。
 
 自动检测所需 Routing Context 最多保存最近 4 条用户消息，每条限制长度，并允许通过配置完全关闭持久化。它不作为历史记录来源。
@@ -351,6 +364,7 @@ platforms:
         recent_user_messages: 4
         cooldown_turns: 4
         show_auto_switch_hint: false
+        metrics_retention_days: 30
 ```
 
 配置原则：
@@ -442,7 +456,7 @@ LLM、网络和标题生成不得在 SQLite 写事务内执行。
 
 ### Phase 3：可观测性与发布
 
-- 自动切换 precision/latency/failure 指标；
+- 自动切换 latency/failure 指标和撤销反馈；人工标注集仍是 precision 的唯一发布口径；
 - 用户文档、安装和回滚说明；
 - 上游 iLink transport 差异检查；
 - 可选确定性规则与软归档。

@@ -8,6 +8,10 @@ commit: c661785f872b5647fbac7c138d965180783bd9af
 verified: 2026-09-19
 ```
 
+The pinned source was also loaded through `hermes plugins doctor . --ci` on
+2026-09-19; manifest parsing, import, and platform/auxiliary-task registration
+all passed through Hermes's real plugin runtime.
+
 The plugin currently subclasses `gateway.platforms.weixin.WeixinAdapter` because the pinned Hermes version does not expose its iLink transport as a separate public component. The narrow override is `handle_message()`, which the official adapter calls after text batching and for media messages.
 
 Automatic detection uses the supported plugin LLM surface: `ctx.register_auxiliary_task()` and `ctx.llm.acomplete_structured()`. Provider credentials and model routing remain owned by Hermes.

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -223,6 +224,101 @@ class TopicRoutingTests(unittest.TestCase):
 
         self.assertIsNone(invalid_result)
         self.assertIsNone(timeout_result)
+
+    def test_detection_metrics_keep_content_out_of_the_database(self):
+        detector = TopicBoundaryDetector(
+            FakeLlm(
+                {
+                    "is_new_topic": True,
+                    "confidence": 0.97,
+                    "suggested_title": "新话题",
+                }
+            )
+        )
+        router = TopicRoutingModule(
+            self.store,
+            "account-1",
+            detector=detector,
+            auto_detect=True,
+            cooldown_turns=0,
+        )
+
+        switched = asyncio.run(router.decide(message("这是足够长的无关新问题", "m1")))
+        asyncio.run(router.decide(message("撤销切换", "m2")))
+        metrics = self.store.detection_summary("account-1")
+        with closing(self.store._connect()) as connection:
+            stored = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'detection_events'"
+            ).fetchone()["sql"]
+
+        self.assertEqual("detected", switched.reason)
+        self.assertEqual(1, metrics["automatic_switches"])
+        self.assertEqual(1, metrics["undone_switches"])
+        self.assertNotIn("content", stored.lower())
+
+
+class QualityGateTests(unittest.TestCase):
+    @staticmethod
+    def _write_dataset(labels: Path, predictions: Path, *, error_switch: bool = False):
+        labels.write_text(
+            "\n".join(
+                json.dumps({"id": str(index), "is_new_topic": index < 120})
+                for index in range(200)
+            ),
+            encoding="utf-8",
+        )
+        predictions.write_text(
+            "\n".join(
+                json.dumps(
+                    {
+                        "id": str(index),
+                        "is_new_topic": index < 75 or (error_switch and index == 199),
+                        "confidence": 0.96 if index < 75 or (error_switch and index == 199) else 0.10,
+                        "status": "error" if error_switch and index == 199 else "ok",
+                    }
+                )
+                for index in range(200)
+            ),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _run_gate(labels: Path, predictions: Path):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parents[1] / "tools" / "evaluate_boundary_dataset.py"),
+                "--labels",
+                str(labels),
+                "--predictions",
+                str(predictions),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_quality_gate_accepts_a_passing_200_sample_dataset(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            labels = root / "labels.jsonl"
+            predictions = root / "predictions.jsonl"
+            self._write_dataset(labels, predictions)
+            result = self._run_gate(labels, predictions)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('"precision": 1.0', result.stdout)
+
+    def test_quality_gate_rejects_error_that_requested_a_switch(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            labels = root / "labels.jsonl"
+            predictions = root / "predictions.jsonl"
+            self._write_dataset(labels, predictions, error_switch=True)
+            result = self._run_gate(labels, predictions)
+
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn('"error_switches": 1', result.stdout)
 
 
 if __name__ == "__main__":

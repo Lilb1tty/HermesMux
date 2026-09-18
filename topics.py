@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 import uuid
 from collections import deque
 from contextlib import closing
@@ -145,10 +146,17 @@ class TopicBoundaryDetector:
 class TopicStore:
     """Small SQLite index for topic metadata and the active-topic pointer."""
 
-    def __init__(self, path: str | Path, *, processed_retention_days: int = 7):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        processed_retention_days: int = 7,
+        metrics_retention_days: int = 30,
+    ):
         self.path = Path(path).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.processed_retention_days = max(1, int(processed_retention_days))
+        self.metrics_retention_days = max(1, int(metrics_retention_days))
         self._initialize()
         try:
             self.path.chmod(0o600)
@@ -194,6 +202,18 @@ class TopicStore:
                     message_id TEXT NOT NULL,
                     processed_at TEXT NOT NULL,
                     PRIMARY KEY (account_id, message_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS detection_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL,
+                    peer_id TEXT NOT NULL,
+                    topic_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    confidence REAL,
+                    latency_ms INTEGER,
+                    was_undone INTEGER NOT NULL DEFAULT 0,
+                    observed_at TEXT NOT NULL
                 );
                 """
             )
@@ -379,6 +399,84 @@ class TopicStore:
             )
         return old, new
 
+    def record_detection(
+        self,
+        account_id: str,
+        peer_id: str,
+        topic_id: str,
+        outcome: str,
+        *,
+        confidence: float | None = None,
+        latency_ms: int | None = None,
+    ) -> None:
+        """Persist aggregate-quality inputs without retaining message content."""
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=self.metrics_retention_days)).isoformat()
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                "DELETE FROM detection_events WHERE observed_at < ?", (cutoff,)
+            )
+            connection.execute(
+                """INSERT INTO detection_events
+                   (account_id, peer_id, topic_id, outcome, confidence, latency_ms, observed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    account_id,
+                    peer_id,
+                    topic_id,
+                    outcome,
+                    confidence,
+                    latency_ms,
+                    now.isoformat(),
+                ),
+            )
+
+    def mark_automatic_switch_undone(
+        self, account_id: str, peer_id: str, topic_id: str
+    ) -> None:
+        """Treat an immediate undo as feedback, without claiming it is ground truth."""
+        with closing(self._connect()) as connection, connection:
+            row = connection.execute(
+                """SELECT id FROM detection_events
+                   WHERE account_id = ? AND peer_id = ? AND topic_id = ?
+                     AND outcome IN ('rule_switch', 'detected_switch')
+                     AND was_undone = 0
+                   ORDER BY id DESC LIMIT 1""",
+                (account_id, peer_id, topic_id),
+            ).fetchone()
+            if row is not None:
+                connection.execute(
+                    "UPDATE detection_events SET was_undone = 1 WHERE id = ?",
+                    (row["id"],),
+                )
+
+    def detection_summary(self, account_id: str) -> dict[str, int | float]:
+        """Return bounded operational metrics; offline labels remain the precision oracle."""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=self.metrics_retention_days)
+        ).isoformat()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """SELECT outcome, was_undone, latency_ms FROM detection_events
+                   WHERE account_id = ? AND observed_at >= ?""",
+                (account_id, cutoff),
+            ).fetchall()
+        automatic = [
+            row
+            for row in rows
+            if row["outcome"] in {"rule_switch", "detected_switch"}
+        ]
+        latencies = sorted(
+            row["latency_ms"] for row in rows if row["latency_ms"] is not None
+        )
+        p95 = latencies[(95 * len(latencies) + 99) // 100 - 1] if latencies else 0
+        return {
+            "automatic_switches": len(automatic),
+            "undone_switches": sum(row["was_undone"] for row in automatic),
+            "detector_failures": sum(row["outcome"] == "detector_failure" for row in rows),
+            "p95_latency_ms": p95,
+        }
+
     @staticmethod
     def _topic(row: sqlite3.Row) -> Topic:
         return Topic(
@@ -489,8 +587,12 @@ class TopicRoutingModule:
             return RoutingDecision(action="reply", reply=reply, reason="switch")
 
         if text == "撤销切换":
+            current = self.store.current_topic(self.account_id, peer_id)
             try:
                 topic = self.store.undo_switch(self.account_id, peer_id)
+                self.store.mark_automatic_switch_undone(
+                    self.account_id, peer_id, current.topic_id
+                )
                 reply = f"已返回 #{topic.short_id} {topic.title}。"
             except ValueError as error:
                 reply = str(error)
@@ -505,6 +607,19 @@ class TopicRoutingModule:
                     f"当前为新话题 #{new.short_id}。"
                 ),
                 reason="explicit",
+            )
+
+        if text == "话题统计":
+            metrics = self.store.detection_summary(self.account_id)
+            return RoutingDecision(
+                action="reply",
+                reply=(
+                    "自动换题统计（最近保留期）："
+                    f"切换 {metrics['automatic_switches']} 次，"
+                    f"已撤销 {metrics['undone_switches']} 次，"
+                    f"检测失败 {metrics['detector_failures']} 次，"
+                    f"p95 {metrics['p95_latency_ms']}ms。"
+                ),
             )
 
         topic = self.store.current_topic(self.account_id, peer_id)
@@ -528,6 +643,12 @@ class TopicRoutingModule:
                 self.account_id, peer_id, _title_from(text), source="rule"
             )
             self._record(peer_id, new_topic.topic_id, text)
+            self.store.record_detection(
+                self.account_id,
+                peer_id,
+                new_topic.topic_id,
+                "rule_switch",
+            )
             return RoutingDecision(
                 action="route",
                 topic_id=new_topic.topic_id,
@@ -546,6 +667,7 @@ class TopicRoutingModule:
         ):
             return None
 
+        started = time.perf_counter()
         try:
             detection = await self.detector.detect(
                 current_title=current.title,
@@ -555,8 +677,33 @@ class TopicRoutingModule:
             )
         except Exception as error:
             LOG.warning("Weixin topic detector error; keeping current topic: %s", error)
+            self.store.record_detection(
+                self.account_id,
+                peer_id,
+                current.topic_id,
+                "detector_failure",
+                latency_ms=round((time.perf_counter() - started) * 1000),
+            )
             return None
-        if detection is None or not detection.is_new_topic:
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        if detection is None:
+            self.store.record_detection(
+                self.account_id,
+                peer_id,
+                current.topic_id,
+                "detector_failure",
+                latency_ms=latency_ms,
+            )
+            return None
+        if not detection.is_new_topic:
+            self.store.record_detection(
+                self.account_id,
+                peer_id,
+                current.topic_id,
+                "kept_current",
+                confidence=detection.confidence,
+                latency_ms=latency_ms,
+            )
             return None
 
         new_topic = self.store.create_topic(
@@ -566,6 +713,14 @@ class TopicRoutingModule:
             source="detected",
         )
         self._record(peer_id, new_topic.topic_id, text)
+        self.store.record_detection(
+            self.account_id,
+            peer_id,
+            new_topic.topic_id,
+            "detected_switch",
+            confidence=detection.confidence,
+            latency_ms=latency_ms,
+        )
         return RoutingDecision(
             action="route",
             topic_id=new_topic.topic_id,
