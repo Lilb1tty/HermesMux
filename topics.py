@@ -494,7 +494,17 @@ _NEW_WITH_CONTENT = (
     re.compile(r"^新话题\s*[：:]\s*(.+)$", re.DOTALL),
     re.compile(r"^换个话题\s*[，,]\s*(.+)$", re.DOTALL),
 )
-_NEW_ONLY = {"/new", "新话题", "换话题", "换个话题"}
+_NEW_ONLY = {"/new", "新话题", "换话题", "换个话题", "创建新话题", "新建话题"}
+
+# Zero-width / invisible characters that WeChat clients often append to messages.
+# They break exact-match command parsing (e.g. "新话题\u200b" != "新话题").
+_INVISIBLES = dict.fromkeys(
+    map(ord, "\u200b\u200c\u200d\ufeff\u2060\u00ad"), None
+)
+
+
+def _clean_text(text: str) -> str:
+    return text.translate(_INVISIBLES).strip()
 _SWITCH = re.compile(r"^切到\s*#?([0-9a-fA-F]{4,32})$")
 _DETERMINISTIC_BOUNDARY = re.compile(
     r"^(?:换个完全不同的?问题|另一个无关问题|说个完全不同的)[：:，,。\s]*"
@@ -535,7 +545,7 @@ class TopicRoutingModule:
         async with lock:
             if not self.store.claim_message(self.account_id, getattr(message, "message_id", None)):
                 return RoutingDecision(action="reply", reply="")
-            return await self._decide(peer_id, (message.text or "").strip())
+            return await self._decide(peer_id, _clean_text(message.text or ""))
 
     async def _decide(self, peer_id: str, text: str) -> RoutingDecision:
         if text in _NEW_ONLY:
