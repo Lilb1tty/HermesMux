@@ -4,7 +4,6 @@ HermesMux 是一个面向 **个人微信 Weixin iLink Bot** 的第三方 Hermes 
 
 微信里仍然只有一个私聊窗口，但插件会保守地判断你是否开启了新话题。每个话题都会通过 Hermes 官方 `SessionSource.thread_id` 进入独立 Session；切换话题不会清空或复制旧 Transcript，Hermes 的 Memory、压缩和历史检索仍照常工作。
 
-> 当前版本已实现 Phase 2 检测代码，但尚未完成 200 条人工标注样本的 precision 门禁和真实个人微信 E2E。检测偏保守：不确定、超时或模型异常时一律留在当前话题。
 
 ## 安装
 
